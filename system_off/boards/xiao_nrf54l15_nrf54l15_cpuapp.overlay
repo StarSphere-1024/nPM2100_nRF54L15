@@ -1,0 +1,59 @@
+/ {
+	cpuapp_sram@2002e000 {
+		compatible = "zephyr,memory-region", "mmio-sram";
+		reg = <0x2002e000 DT_SIZE_K(4)>;
+		zephyr,memory-region = "RetainedMem";
+		status = "okay";
+
+		retainedmem0: retainedmem {
+			compatible = "zephyr,retained-ram";
+			status = "okay";
+		};
+	};
+
+	leds {
+		compatible = "gpio-leds";
+
+		led0: led_0 {
+			gpios = <&gpio2 6 GPIO_ACTIVE_HIGH>;
+			label = "LED 0";
+		};
+	};
+
+	buttons: buttons {
+		compatible = "gpio-keys";
+
+		usr_btn: usr-btn {
+			gpios = <&gpio0 0 (GPIO_PULL_UP | GPIO_ACTIVE_LOW)>;
+			label = "USR";
+			zephyr,code = <INPUT_KEY_ENTER>;
+		};
+	};
+
+	aliases {
+		led0 = &led0;
+		buttons = &buttons;
+		sw0 = &usr_btn;
+		retainedmemdevice = &retainedmem0;
+	};
+};
+
+
+
+&cpuapp_sram {
+	/* Shrink SRAM size to avoid overlap with retained memory region */
+	reg = <0x20000000 DT_SIZE_K(184)>;
+	ranges = <0x0 0x20000000 0x2e000>;
+};
+
+&pdm_imu_pwr{
+    /delete-property/ regulator-boot-on;
+};
+
+&rfsw_pwr{
+    /delete-property/ regulator-boot-on;
+};
+
+&vbat_pwr{
+    /delete-property/ regulator-boot-on;
+};

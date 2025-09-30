@@ -1,0 +1,97 @@
+/ {
+    aliases {
+        pwm-led = &pwm0_led0;
+    };
+
+    pwm_leds {
+        compatible = "pwm-leds";
+        pwm0_led0: my_pwm_led {
+            pwms = <&pwm20 0 PWM_MSEC(20) PWM_POLARITY_NORMAL>;
+            status = "okay";
+        };
+    };
+};
+
+&pwm20 {
+    status = "okay";
+	pinctrl-0 = <&pwm20_default>;
+	pinctrl-1 = <&pwm20_sleep>;
+	pinctrl-names = "default", "sleep";
+};
+
+&pinctrl {
+    pwm20_default: pwm20_default {
+		group1 {
+			psels = <NRF_PSEL(PWM_OUT0, 1, 9)>;
+		};
+	};
+
+    pwm20_sleep: pwm20_sleep {
+		group1 {
+			psels = <NRF_PSEL(PWM_OUT0, 1, 9)>;
+			low-power-enable;
+		};
+	};
+};
+
+&i2c30 {
+	status = "okay";
+
+	npm2100_pmic: pmic@74 {
+		compatible = "nordic,npm2100";
+		reg = <0x74>;
+		pmic-int-pin = <1>;
+		pmic-int-flags = <GPIO_ACTIVE_HIGH>;
+		host-int-type = "level";
+		shiphold-longpress = "reset";
+
+		npm2100_gpio: gpio-controller {
+			compatible = "nordic,npm2100-gpio";
+			gpio-controller;
+			#gpio-cells = <2>;
+			ngpios = <2>;
+		};
+
+		npm2100_regulators: regulators {
+			compatible = "nordic,npm2100-regulator";
+
+			/* limits are set to min/max allowed values */
+			npm2100_boost: BOOST {
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <3300000>;
+				regulator-init-microvolt= <3300000>; 
+				regulator-boot-on;
+				regulator-init-microamp = <0>;
+			};
+
+			npm2100_ldosw: LDOSW {
+				regulator-min-microvolt = <800000>;
+				regulator-max-microvolt = <3000000>;
+			};
+		};
+
+		npm2100_wdt: watchdog {
+			compatible = "nordic,npm2100-wdt";
+		};
+
+		npm2100_vbat: vbat {
+			compatible = "nordic,npm2100-vbat";
+		};
+
+		npm2100_buttons: buttons {
+			compatible = "gpio-keys";
+
+			pmic_shphld: pmic_shphld {
+				gpios = <&npm2100_gpio 4 GPIO_ACTIVE_LOW>;
+				label = "Pmic shphld";
+				zephyr,code = <INPUT_KEY_0>;
+			};
+		};
+	};
+
+};
+
+&npm2100_pmic {
+	host-int-gpios = <&gpio1 6 GPIO_ACTIVE_HIGH>;
+};
+
