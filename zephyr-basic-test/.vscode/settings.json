@@ -1,8 +1,0 @@
-{
-    "files.associations": {
-        "shell.h": "c",
-        "kernel.h": "c",
-        "stdint.h": "c",
-        "device.h": "c"
-    }
-}
