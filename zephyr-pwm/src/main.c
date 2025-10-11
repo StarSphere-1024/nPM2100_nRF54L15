@@ -1,23 +1,74 @@
 #include <zephyr/kernel.h>
 #include <zephyr/drivers/pwm.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/shell/shell.h>
+#include <stdlib.h>
 
 // Register log module
-LOG_MODULE_REGISTER(pwm_fade_example, CONFIG_LOG_DEFAULT_LEVEL);
+LOG_MODULE_REGISTER(pwm_shell_example, CONFIG_LOG_DEFAULT_LEVEL);
 
-// Define PWM period as 1 millisecond (1,000,000 nanoseconds)
+// Define default PWM period as 1 millisecond (1,000,000 nanoseconds)
 // This corresponds to a 1 kHz PWM frequency
-#define PWM_PERIOD_NS 1000000UL // Use UL to ensure unsigned long
+static uint32_t pwm_period_ns = 1000000UL; // Use UL to ensure unsigned long
+static uint32_t pwm_duty_ns = 500000UL;   // Default to 50% duty cycle
 
 // Get the PWM LED device defined in the device tree
 static const struct pwm_dt_spec led = PWM_DT_SPEC_GET(DT_ALIAS(pwm_led));
 
+static int cmd_set_freq(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc != 2) {
+        shell_print(sh, "Usage: set_freq <frequency_hz>");
+        return -EINVAL;
+    }
+
+    uint32_t freq_hz = atoi(argv[1]);
+    if (freq_hz == 0) {
+        shell_print(sh, "Invalid frequency value.");
+        return -EINVAL;
+    }
+
+    pwm_period_ns = 1000000000UL / freq_hz;
+    int ret = pwm_set_dt(&led, pwm_period_ns, pwm_duty_ns);
+    if (ret < 0) {
+        shell_error(sh, "Error %d: failed to set PWM period", ret);
+        return ret;
+    }
+
+    shell_print(sh, "Set PWM frequency to %u Hz (period: %u ns)", freq_hz, pwm_period_ns);
+    return 0;
+}
+
+static int cmd_set_duty(const struct shell *sh, size_t argc, char **argv)
+{
+    if (argc != 2) {
+        shell_print(sh, "Usage: set_duty <duty_cycle_percent>");
+        return -EINVAL;
+    }
+
+    uint32_t duty_percent = atoi(argv[1]);
+    if (duty_percent > 100) {
+        shell_print(sh, "Duty cycle cannot be more than 100%%.");
+        return -EINVAL;
+    }
+
+    pwm_duty_ns = (pwm_period_ns * duty_percent) / 100U;
+    int ret = pwm_set_dt(&led, pwm_period_ns, pwm_duty_ns);
+    if (ret < 0) {
+        shell_error(sh, "Error %d: failed to set PWM duty cycle", ret);
+        return ret;
+    }
+
+    shell_print(sh, "Set PWM duty cycle to %u%% (%u ns)", duty_percent, pwm_duty_ns);
+    return 0;
+}
+
+SHELL_CMD_REGISTER(set_freq, NULL, "Set PWM frequency in Hz", cmd_set_freq);
+SHELL_CMD_REGISTER(set_duty, NULL, "Set PWM duty cycle in percent (0-100)", cmd_set_duty);
+
 int main(void)
 {
-    int ret;
-    uint32_t duty_ns; // PWM duty cycle (in nanoseconds)
-
-    LOG_INF("Starting Zephyr LED fade example...");
+    LOG_INF("Starting Zephyr PWM Shell example...");
 
     // Check if PWM device is ready
     if (!device_is_ready(led.dev)) {
@@ -25,36 +76,15 @@ int main(void)
         return 0;
     }
 
-    LOG_INF("PWM Period set to %lu ns (1kHz frequency)", PWM_PERIOD_NS);
-
-    while (1) {
-        // Fade in from minimum to maximum
-        for (int fadeValue = 0; fadeValue <= 255; fadeValue += 3) {
-            // Calculate duty cycle (nanoseconds): map Arduino's 0-255 to PWM_PERIOD_NS range
-            duty_ns = (PWM_PERIOD_NS * fadeValue) / 255U;
-
-            // Set PWM duty cycle. First parameter is period, second is duty cycle.
-            ret = pwm_set_dt(&led, PWM_PERIOD_NS, duty_ns);
-            if (ret < 0) {
-                LOG_ERR("Error %d: failed to set PWM duty cycle", ret);
-                return 0;
-            }
-            k_msleep(30); // Wait 30 milliseconds
-        }
-
-        // Fade out from maximum to minimum
-        for (int fadeValue = 255; fadeValue >= 0; fadeValue -= 3) {
-            // Calculate duty cycle
-            duty_ns = (PWM_PERIOD_NS * fadeValue) / 255U;
-
-            // Set PWM duty cycle
-            ret = pwm_set_dt(&led, PWM_PERIOD_NS, duty_ns);
-            if (ret < 0) {
-                LOG_ERR("Error %d: failed to set PWM duty cycle", ret);
-                return 0;
-            }
-            k_msleep(30); // Wait 30 milliseconds
-        }
+    // Set initial PWM signal
+    int ret = pwm_set_dt(&led, pwm_period_ns, pwm_duty_ns);
+    if (ret < 0) {
+        LOG_ERR("Error %d: failed to set initial PWM duty cycle", ret);
+        return 0;
     }
+
+    LOG_INF("Initial PWM frequency: 1kHz, duty cycle: 50%%");
+    LOG_INF("Use 'set_freq' and 'set_duty' commands to control the PWM.");
+
     return 0;
 }
