@@ -31,8 +31,8 @@
 
 #define DEEP_SLEEP_TIME_S 5
 #define MEASURE_TIME_S 10
-#define SCAN_INTERVAL_S 30
-#define MAX_SCANNED_DEVICES 30
+#define SCAN_TIMEOUT_S 5
+#define MAX_SCANNED_DEVICES 20
 
 LOG_MODULE_REGISTER(factory_test, LOG_LEVEL_INF);
 
@@ -343,8 +343,8 @@ static void bt_device_found(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
 	if (device_count % 10 == 0) {
 		k_timer_stop(&scan_print_timer);  // Cancel any active timeout
 		scan_print_and_reset(10);
-	} else if (device_count == 1) {  // First device, start 20s timeout
-		k_timer_start(&scan_print_timer, K_SECONDS(20), K_NO_WAIT);  // Single timeout
+	} else if (device_count == 1) {  // First device, start 5s timeout
+		k_timer_start(&scan_print_timer, K_SECONDS(SCAN_TIMEOUT_S), K_NO_WAIT);  // Single timeout
 	}
 	// If count > 1 but < 10, timeout already started
 }
