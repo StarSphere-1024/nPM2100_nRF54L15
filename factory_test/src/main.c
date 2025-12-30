@@ -31,9 +31,12 @@
 
 #define DEEP_SLEEP_TIME_S 5
 #define MEASURE_TIME_S 10
-#define MAX_SCANNED_DEVICES 10
+#define SCAN_INTERVAL_S 30
+#define MAX_SCANNED_DEVICES 30
 
 LOG_MODULE_REGISTER(factory_test, LOG_LEVEL_INF);
+
+static void scan_print_and_reset(int batch_size);
 
 enum factory_mode {
 	FACTORY_MODE_WORK = 0,
@@ -50,6 +53,7 @@ struct scanned_device {
 	bt_addr_le_t addr;
 	int8_t rssi;
 	uint8_t type;
+	char name[30];  // Buffer for device name, adjust size if needed (max BLE name length is 29 + null)
 };
 
 static struct scanned_device devices[MAX_SCANNED_DEVICES];
@@ -229,39 +233,120 @@ K_THREAD_DEFINE(led_thread_id, 768, led_worker_thread, NULL, NULL, NULL, 5, 0, 0
 
 static void scan_print_timer_handler(struct k_timer *timer)
 {
+	ARG_UNUSED(timer);
+	if (device_count > 0 && device_count < 10) {
+		scan_print_and_reset(device_count);  // Print all current devices
+	}
+}
+
+static void scan_print_and_reset(int batch_size)
+{
 	if (device_count == 0) {
 		return;
 	}
 
-	printk("Scanned devices (last %d):\n", device_count);
+	int print_count = MIN(device_count, batch_size);
+	printk("Scanned devices (batch of %d):\n", print_count);
 	int start = (device_index - device_count + MAX_SCANNED_DEVICES) % MAX_SCANNED_DEVICES;
-	for (int i = 0; i < device_count; i++) {
+	for (int i = 0; i < print_count; i++) {
 		int idx = (start + i) % MAX_SCANNED_DEVICES;
 		char addr_str[BT_ADDR_LE_STR_LEN];
 		bt_addr_le_to_str(&devices[idx].addr, addr_str, sizeof(addr_str));
-		printk("  %s RSSI %d dBm type 0x%02x\n", addr_str, devices[idx].rssi, devices[idx].type);
+		printk("  %s RSSI %d dBm type 0x%02x name %s\n", addr_str, devices[idx].rssi, devices[idx].type, devices[idx].name);
 	}
-	// Clear the list after printing
-	device_count = 0;
-	device_index = 0;
+	// Shift the remaining devices to the beginning if any
+	if (device_count > print_count) {
+		for (int i = 0; i < device_count - print_count; i++) {
+			int old_idx = (start + print_count + i) % MAX_SCANNED_DEVICES;
+			int new_idx = i;
+			devices[new_idx] = devices[old_idx];
+		}
+		device_index = device_count - print_count;
+		device_count -= print_count;
+	} else {
+		device_count = 0;
+		device_index = 0;
+	}
+}
+
+static _Bool parse_device_name(struct bt_data *data, void *user_data)
+{
+	char *name = user_data;
+
+	if (data->type == BT_DATA_NAME_COMPLETE || data->type == BT_DATA_NAME_SHORTENED) {
+		strncpy(name, (const char *)data->data, MIN(data->data_len, sizeof(devices[0].name) - 1));
+		name[MIN(data->data_len, sizeof(devices[0].name) - 1)] = '\0';
+		return false;  // Stop parsing once name is found
+	}
+
+	return true;  // Continue parsing
 }
 
 static void bt_device_found(const bt_addr_le_t *addr, int8_t rssi, uint8_t type,
 			    struct net_buf_simple *ad)
 {
-	ARG_UNUSED(ad);
-
 	if (atomic_get(&g_mode) != FACTORY_MODE_TEST) {
 		return;
 	}
 
-	devices[device_index].addr = *addr;
-	devices[device_index].rssi = rssi;
-	devices[device_index].type = type;
-	device_index = (device_index + 1) % MAX_SCANNED_DEVICES;
-	if (device_count < MAX_SCANNED_DEVICES) {
-		device_count++;
+	// Filter: Only process public addresses
+	// if (addr->type != BT_ADDR_LE_PUBLIC) {
+	// 	return;
+	// }
+
+	char temp_name[30] = {0};
+	// Parse advertising data for name
+	bt_data_parse(ad, parse_device_name, temp_name);
+
+	// Only add if name is not empty
+	if (strlen(temp_name) == 0) {
+		return;
 	}
+
+	// Check if device already exists in the list
+	int existing_index = -1;
+	for (int i = 0; i < device_count; i++) {
+		int idx = (device_index - device_count + i + MAX_SCANNED_DEVICES) % MAX_SCANNED_DEVICES;
+		if (bt_addr_le_cmp(&devices[idx].addr, addr) == 0) {
+			existing_index = idx;
+			break;
+		}
+	}
+
+	if (existing_index != -1) {
+		// Update existing device with new RSSI and type (keep the latest)
+		devices[existing_index].rssi = rssi;
+		devices[existing_index].type = type;
+		// Optionally update name if it changed, but for simplicity, keep the first name
+		return;
+	}
+
+	// Add new device if not full
+	if (device_count < MAX_SCANNED_DEVICES) {
+		devices[device_index].addr = *addr;
+		devices[device_index].rssi = rssi;
+		devices[device_index].type = type;
+		strcpy(devices[device_index].name, temp_name);
+		device_index = (device_index + 1) % MAX_SCANNED_DEVICES;
+		device_count++;
+	} else {
+		// If full, replace the oldest (circular buffer behavior)
+		int oldest_idx = (device_index - device_count + MAX_SCANNED_DEVICES) % MAX_SCANNED_DEVICES;
+		devices[oldest_idx].addr = *addr;
+		devices[oldest_idx].rssi = rssi;
+		devices[oldest_idx].type = type;
+		strcpy(devices[oldest_idx].name, temp_name);
+		device_index = (device_index + 1) % MAX_SCANNED_DEVICES;
+	}
+
+	// Print every 10 devices
+	if (device_count % 10 == 0) {
+		k_timer_stop(&scan_print_timer);  // Cancel any active timeout
+		scan_print_and_reset(10);
+	} else if (device_count == 1) {  // First device, start 20s timeout
+		k_timer_start(&scan_print_timer, K_SECONDS(20), K_NO_WAIT);  // Single timeout
+	}
+	// If count > 1 but < 10, timeout already started
 }
 
 static int bt_stack_ensure_ready(void)
@@ -295,8 +380,8 @@ static int bt_scan_start(void)
 	}
 
 	struct bt_le_scan_param scan_param = {
-		.type = BT_HCI_LE_SCAN_ACTIVE,
-		.options = BT_LE_SCAN_OPT_NONE,
+		.type = BT_HCI_LE_SCAN_ACTIVE,  // Changed to passive scanning
+		.options = BT_LE_SCAN_OPT_FILTER_DUPLICATE,  // Added duplicate filter
 		.interval = BT_GAP_SCAN_FAST_INTERVAL,
 		.window = BT_GAP_SCAN_FAST_WINDOW,
 	};
@@ -307,7 +392,7 @@ static int bt_scan_start(void)
 		device_count = 0;
 		device_index = 0;
 		k_timer_init(&scan_print_timer, scan_print_timer_handler, NULL);
-		k_timer_start(&scan_print_timer, K_SECONDS(5), K_SECONDS(5));
+		// Removed periodic timer start, will use timeout instead
 		LOG_INF("BT scan started");
 	}
 	return err;
@@ -323,6 +408,10 @@ static int bt_scan_stop(void)
 	if (!err) {
 		atomic_set(&g_bt_scan_running, 0);
 		k_timer_stop(&scan_print_timer);
+		// Print any remaining devices on stop
+		if (device_count > 0) {
+			scan_print_and_reset(device_count);
+		}
 		device_count = 0;
 		device_index = 0;
 		LOG_INF("BT scan stopped");
